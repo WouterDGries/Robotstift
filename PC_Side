@@ -1,0 +1,560 @@
+/*
+Warning!: Software isn't finished yet and is still being modified
+This is still in a test
+*/
+
+#include <iostream>
+#include "bitmap_image.hpp"
+#include <iomanip>
+#include <windows.h>
+#include <stdio.h>
+
+
+const int Ypixels = 451;
+const int Xpixels = 371;
+
+const int lijnArrayGrootte = 255;
+
+void omzetten(bool pixelValue[][Ypixels], int& aantalNieuwePixels);
+void uitdunnen(bool pixelValue[][Ypixels], bool pixelCopy[][Ypixels], int& aantalNieuwePixels, int filler);
+void tekenen(bool pixelCopy[][Ypixels], int& aantalNieuwepixels, int& aantalStopPunten);
+bool fillChecker(int Xpixel, int Ypixel);
+
+void OpenComPoort();
+bool Instellingen();
+bool Schrijven(short PositieToConvert[]);
+
+HANDLE hComm;
+DCB dcb;
+
+
+int main() {
+
+    OpenComPoort();
+
+    if (hComm != INVALID_HANDLE_VALUE)
+    {
+        Instellingen();
+        //Schrijven();
+
+    }
+
+    bool pixelValue[Xpixels][Ypixels];                                             //Paint plaatje is 450 hoog en 370 breedt
+    bool pixelCopy[Xpixels][Ypixels];
+
+    int aantalNieuwePixels = 0;                                                  //rekenhulp voor kleuren
+    int aantalStopPunten = 0;                                                    //berekend hoevaak de pen van het bord af moet.
+
+    omzetten(pixelValue, aantalNieuwePixels);
+
+    for (int y = 0; y < Ypixels; y++) {                                          //Array wordt gekopieerd zodat de nieuwe array niet gebaseerd wordt op de wijzegingen
+        for (int x = 0; x < Xpixels; x++) {
+            pixelCopy[x][y] = pixelValue[x][y];
+        }
+    }
+
+    int mode = 0;
+    std::cout << "In welke mode wil je de afbeelding uittekenen? \n";
+    std::cout << "  *De volledige afbeelding:               1\n";
+    std::cout << "  *De uitlijning met lichte opvulling:    2\n";
+    std::cout << "  *Alleen de uitlijning:                  3\n";
+    std::cin >> mode; std::cin.get();
+
+    if (mode == 2) {
+        uitdunnen(pixelValue, pixelCopy, aantalNieuwePixels, 1);
+    }
+    if (mode == 3) {
+        uitdunnen(pixelValue, pixelCopy, aantalNieuwePixels, 0);
+    }
+
+    tekenen(pixelCopy, aantalNieuwePixels, aantalStopPunten);
+
+    std::cout << "Aantal te tekenen pixels: " << aantalNieuwePixels << "\n";
+    std::cout << "Aantal stoppunten " << aantalStopPunten;
+
+}
+
+
+void OpenComPoort()
+{
+    // openen van COM poort. Voor het nummer: zie apparaatbeheer
+    hComm = CreateFileA("COM9",               //port name
+        GENERIC_READ | GENERIC_WRITE,         //Read/Write
+        0,                                    // No Sharing
+        NULL,                                 // No Security
+        OPEN_EXISTING,                        // Open existing port only
+        0,                                    // Non Overlapped I/O
+        NULL);                                // Null for Comm Devices
+
+    // controlleer of het gelukt is
+    if (hComm == INVALID_HANDLE_VALUE)
+        printf("Error in opening serial port");
+    else
+        printf("opening serial port successful");
+
+   
+}
+
+
+
+bool Instellingen()
+{
+    // huidige data communication block ophalen
+    if (!GetCommState(hComm, &dcb))
+        return 0x100;
+
+    // data communication block aanpassen, bijvoorbeeld juiste baudrate
+    dcb.BaudRate = CBR_9600; //9600 Baud
+    dcb.ByteSize = 8; //8 data bits
+    dcb.Parity = NOPARITY; //no parity
+    dcb.StopBits = ONESTOPBIT; //1 stop
+
+    // instellen van data communication block
+    //if (!SetCommState(hComm, &dcb))
+   //     return 0x100;
+
+    std::cout << "Nu zijn alle instellingen gezet";
+    //std::cin.get();
+}
+
+
+bool Schrijven(short PositieToConvert[])
+{
+    const int AANTAL = 3;
+    bool enable = true;
+    short PositieToSend[3] = { 10, 00, 10 };
+    char myBytes[6] = { 1,2,3,4,5,6 };
+    DWORD dNoOfBytesWritten;
+    DWORD dwBytesTransferred;
+    DWORD dwCommModemStatus;
+    BYTE Byte;
+    int ReadByte = 1;
+    char startbit[1] = { 9 };
+
+    // while (enable) {
+         /*
+         std::cout << "Naar welke positie wil je verplaatsen?( X Y Z )\n\r";
+
+         std::cin >> PositieToSend[0];
+         std::cin.get(); std::cout << "\n Ik ga naar X positie " << PositieToSend[0] << "\n";
+         std::cin >> PositieToSend[1];
+         std::cin.get(); std::cout << "\n Ik ga naar Y positie " << PositieToSend[1] << "\n";
+         std::cin >> PositieToSend[2];
+         std::cin.get(); std::cout << "\n Ik ga naar Z positie " << PositieToSend[2] << "\n";
+         */
+
+    PositieToSend[0] = PositieToConvert[0];
+    PositieToSend[1] = PositieToConvert[1];
+    PositieToSend[2] = PositieToConvert[2];
+
+
+    myBytes[0] = ((PositieToSend[0] & 0xff00) >> 8);
+    myBytes[1] = PositieToSend[0] & 0xff;
+    myBytes[2] = ((PositieToSend[1] & 0xff00) >> 8);
+    myBytes[3] = PositieToSend[1] & 0xff;
+    myBytes[4] = ((PositieToSend[2] & 0xff00) >> 8);
+    myBytes[5] = PositieToSend[2] & 0xff;
+
+    // hier wordt er geschreven startbit
+    bool Status = WriteFile(hComm,    // Handle to the Serial port
+        startbit,                  // Data to be written to the port
+        1,                           //No of bytes to write
+        &dNoOfBytesWritten,           //Bytes written
+        NULL);
+
+    // hier wordt er geschreven x
+    bool StatuS = WriteFile(hComm,    // Handle to the Serial port
+        myBytes,                  // Data to be written to the port
+        6,                           //No of bytes to write
+        &dNoOfBytesWritten,           //Bytes written
+        NULL);
+
+    std::cout << "De positie is verstuurd\n";
+    while (ReadByte == 1) {
+
+        SetCommMask(hComm, EV_RXCHAR | EV_ERR); //receive character event 
+        WaitCommEvent(hComm, &dwCommModemStatus, 0); //wait for character 
+        if (dwCommModemStatus & EV_RXCHAR)
+            ReadFile(hComm, &Byte, 1, &dwBytesTransferred, 0); //read 1 
+        else if (dwCommModemStatus & EV_ERR)
+            ReadByte = 0x101;
+        ReadByte = Byte;
+        std::cout << ReadByte;
+
+    }
+
+    std::cout << "De motor is aangekomen\n";
+    ReadByte = 1;
+
+    //  std::cout << "Herhalen? (1/0)\n";
+    //  std::cin >> enable;
+    //  std::cin.get();
+
+ // }
+  // en de COM poort weer netjes afsluiten
+//  CloseHandle(hComm);//Closing the Serial Port
+
+//  std::cout << "De poort is weer gesloten";
+//  std::cin.get();
+
+    return 1;
+}
+
+void SchrijvenKort(char lijnArray[])
+{
+
+    lijnArray[0] = 9;
+    //  byte ByteToSend[1] = { PositieToMove };
+    DWORD dNoOfBytesWritten;
+    DWORD dwBytesTransferred;
+    DWORD dwCommModemStatus;
+    BYTE Byte;
+    int ReadByte = 1;
+
+
+    bool correctTransfer = false;
+    while (!correctTransfer) {
+
+        lijnArray[0] = 9;
+        //  byte ByteToSend[1] = { PositieToMove };
+        DWORD dNoOfBytesWritten;
+        DWORD dwBytesTransferred;
+        DWORD dwCommModemStatus;
+        BYTE Byte;
+        int ReadByte = 1;
+
+        // hier wordt er geschreven x
+        bool Status = WriteFile(hComm,    // Handle to the Serial port
+            lijnArray,                  // Data to be written to the port
+            lijnArrayGrootte,                           //No of bytes to write
+            &dNoOfBytesWritten,           //Bytes written
+            NULL);
+
+        std::cout << "\nIk heb dit aan verstuurd" << dNoOfBytesWritten << "\n";
+        for (int i = 0; i < lijnArrayGrootte; i++) {
+
+            int alpha = lijnArray[i];
+            std::cout << alpha;
+        }
+
+        std::cout << "De verplaatsing is verstuurd: " << dNoOfBytesWritten << " bytes verstuurd\n";
+
+        while (ReadByte == 1) {
+
+            SetCommMask(hComm, EV_RXCHAR | EV_ERR); //receive character event 
+            WaitCommEvent(hComm, &dwCommModemStatus, 0); //wait for character 
+            if (dwCommModemStatus & EV_RXCHAR)
+            {
+                ReadFile(hComm, &Byte, 1, &dwBytesTransferred, 0); //read 1 
+                ReadByte = Byte;
+            }
+            else if (dwCommModemStatus & EV_ERR)
+            {
+                ReadByte = 0x101;
+            }
+            std::cout << "Received: " << ReadByte;
+
+        }
+
+        if (ReadByte == 5) {
+            correctTransfer = true;
+        }
+        else { correctTransfer = false; }
+
+
+
+    }
+
+
+    ReadByte = 1;
+
+    while (ReadByte == 1) {
+
+        SetCommMask(hComm, EV_RXCHAR | EV_ERR); //receive character event 
+        WaitCommEvent(hComm, &dwCommModemStatus, 0); //wait for character 
+        if (dwCommModemStatus & EV_RXCHAR)
+        {
+            ReadFile(hComm, &Byte, 1, &dwBytesTransferred, 0); //read 1 
+            ReadByte = Byte;
+        }
+        else if (dwCommModemStatus & EV_ERR)
+        {
+            ReadByte = 0x101;
+        }
+        std::cout << "Received: " << ReadByte;
+
+    }
+    ReadByte = 1;
+
+}
+
+void tekenen(bool pixelCopy[][Ypixels], int& aantalNieuwePixels, int& aantalStopPunten) {
+    //onderstaande 6 regels zijn voor het kleuren van het Output bestand. 
+ //   bitmap_image maker(Xpixels, Ypixels);           //Aanmaken tekenbestand 
+ //   maker.set_all_channels(255, 255, 255);          //achtergrond wit maken. 
+ //   image_drawer draw(maker);                       //zeggen dat we 'maker'per pixel gaan kleuren
+ //   draw.pen_width(1);                              //1 pixel per keer
+ //   int r = 200, g = 0, b = 0;                      //kleuren worden geset. Beginnend bij rood.
+ //   bool toggle = true; int wachtijd = aantalNieuwePixels / 1000; int kleurhulp = 0;  //hulpmiddel voor goed krijgen kleuren.
+
+    bool blackPresent = true;                       //
+    bool busy = true;
+    int firstX, firstY;        //X en Ywaarden voor de functie, om te zorgen dat de X en y van de 
+    int ArrayGetal = 1;
+    char lijnArray[lijnArrayGrootte];
+    for (int i = 0; i < lijnArrayGrootte; i++) { lijnArray[i] = 0; }
+    //for loop niet aangetast worden
+    for (int y = 0; y < Ypixels; y++) {            //van links naar rechts/ boven naar beneden
+        for (int x = 0; x < Xpixels; x++) {
+            busy = true;
+            ArrayGetal = 1;//0###                         //begint weer opnieuw bij 1 in de array
+            for (int i = 0; i < lijnArrayGrootte; i++) { lijnArray[i] = 0; } //maakt de array eerst weer leeg
+
+            if (pixelCopy[x][y] == 1) {              //pixel is zwart
+                firstY = y;                         //coördinaten worden gekopieërd
+                firstX = x;
+                short PositieToConvert[3]{ firstX,firstY,1 };
+                std::cout << "\n Ik verstuur de coördinaten " << firstX << " " << firstY << " \n";
+                Schrijven(PositieToConvert);
+                // std::cin.get();
+                int huidigePixel = 1;           //0##3
+                while (busy) {
+
+                    if (huidigePixel == lijnArrayGrootte) {
+                        lijnArray[huidigePixel - 1] = 8;
+                        SchrijvenKort(lijnArray);
+                        busy = false;
+                        ArrayGetal = 0;
+                    }
+
+                    pixelCopy[firstX][firstY] = 0;             //de pixel wordt wit gemaakt zodat hij niet nog eens overwogen wordt
+
+                    for (int optie = 0; optie < 8; optie++) {   //hij zoekt naar een nabijliggende zwarte pixel (8 mogelijkheden)
+                        if (blackPresent) {                      //wordt false gemaakt als een optie is behaald. Hierdoor sprint hij weer terug naar onder de
+                                                                //while(busy) en begint hij opnieuw. Zijn er geen nabijliggende zwarte pixe
+                            switch (optie) {
+                            case 0:
+                                if (pixelCopy[firstX][firstY + 1] == 1) {
+                                    firstY += 1;
+                                    blackPresent = false;
+                                    lijnArray[ArrayGetal] = 0;
+                                    ArrayGetal++;
+                                    //  SchrijvenKort(0, ArrayGetal,lijnArray);
+
+
+                                }
+                                break;
+                            case 1:
+                                if (pixelCopy[firstX][firstY - 1] == 1) {
+                                    firstY -= 1;
+                                    blackPresent = false;
+                                    lijnArray[ArrayGetal] = 1;
+                                    ArrayGetal++;
+                                    //  SchrijvenKort(1, ArrayGetal);
+
+                                }
+                                break;
+                            case 2:
+                                if (pixelCopy[firstX + 1][firstY] == 1) {
+                                    firstX += 1;
+                                    blackPresent = false;
+                                    lijnArray[ArrayGetal] = 2;
+                                    ArrayGetal++;
+                                    //  SchrijvenKort(2, ArrayGetal);
+                                      //test voor versturen van byte 
+                                }
+                                break;
+                            case 3:
+                                if (pixelCopy[firstX - 1][firstY] == 1) {
+                                    firstX -= 1;
+                                    blackPresent = false;
+                                    lijnArray[ArrayGetal] = 3;
+                                    ArrayGetal++;
+                                    //  SchrijvenKort(3, ArrayGetal);
+
+                                }
+                                break;
+                            case 4:
+                                if (pixelCopy[firstX - 1][firstY + 1] == 1) {
+                                    firstY += 1;
+                                    firstX -= 1;
+                                    blackPresent = false;
+                                    lijnArray[ArrayGetal] = 4;
+                                    ArrayGetal++;
+                                    //  SchrijvenKort(4, ArrayGetal);
+
+                                }
+
+                                break;
+                            case 5:
+                                if (pixelCopy[firstX + 1][firstY + 1] == 1) {
+                                    firstY += 1;
+                                    firstX += 1;
+                                    blackPresent = false;
+                                    lijnArray[ArrayGetal] = 5;
+                                    ArrayGetal++;
+                                    // SchrijvenKort(5, ArrayGetal);
+
+                                }
+
+                                break;
+                            case 6:
+                                if (pixelCopy[firstX + 1][firstY - 1] == 1) {
+                                    firstY -= 1;
+                                    firstX += 1;
+                                    blackPresent = false;
+                                    lijnArray[ArrayGetal] = 6;
+                                    ArrayGetal++;
+                                    //  SchrijvenKort(6, ArrayGetal);
+
+
+                                }
+
+                                break;
+                            case 7:
+                                if (pixelCopy[firstX - 1][firstY - 1] == 1) {
+                                    firstY -= 1;
+                                    firstX -= 1;
+                                    blackPresent = false;
+                                    lijnArray[ArrayGetal] = 7;
+                                    ArrayGetal++;
+                                    // SchrijvenKort(7, ArrayGetal);
+
+                                }
+                                else {
+                                    busy = false;
+                                    //  maker.set_pixel(firstX, firstY, 0, 0, 0);
+                                    aantalStopPunten++;
+                                    lijnArray[ArrayGetal] = 8;
+                                    ArrayGetal++;
+
+                                    bool enable = true;
+
+                                    SchrijvenKort(lijnArray);
+
+                                }
+
+                                //SchrijvenKort(8, ArrayGetal);
+
+
+                                break;
+                            default:
+                                break;
+                            }
+                        }
+
+                    }
+                    blackPresent = true;
+                    huidigePixel++;
+                }
+
+            }
+        }
+    }
+}
+
+
+void omzetten(bool pixelValue[][Ypixels], int& aantalNieuwePixels) {
+    bitmap_image image("Picture.bmp");
+
+    if (!image) { printf("Error - Failed to open: input.bmp\n"); }
+
+    for (std::size_t hoogte = 0; hoogte < Ypixels - 1; hoogte++) {            //De uitleesloop begint op bovenste rij en gaat van links naar rechts
+        for (std::size_t breedte = 0; breedte < Xpixels - 1; breedte++) {
+            rgb_t colour;
+            image.get_pixel(breedte, hoogte, colour);                   //Pakt van de Pixel waar hij is de positie en de RGB kleur.
+
+            if (!(colour.red >= 220 && colour.green >= 220 && colour.blue >= 220)) {
+                //215 is een gevoeligheidsfactor. Echt wit is {255,255,255} ({R,G,B})
+                pixelValue[breedte][hoogte] = 1; //Niet wit is een 1
+                aantalNieuwePixels++;
+            }
+            else {
+                pixelValue[breedte][hoogte] = 0;                     //wit is een 1;
+            }
+        }
+    }                                                           //uitlezen klaar. De bmp afbeelding staat nu in pixelValue[][]
+}
+
+void uitdunnen(bool pixelValue[][Ypixels], bool pixelCopy[][Ypixels], int& aantalNieuwePixels, int filler) {
+    bool opvulling;
+    bool active = true;                                             //Hierin leest de array pixel voor pixel uit
+    for (int y = 0; y < Ypixels; y++) {                                 //of de alle pixels om hem heen ook zwart zijn
+        for (int x = 0; x < Xpixels; x++) {                             //is dit het geval betekent dit dat hij opvulling is
+            if (pixelValue[x][y] == 1) {                             //en dus wordt de pixel wit gemaakt
+
+                for (int optie = 0; optie < 8; optie++) {
+                    if (active) {
+                        switch (optie) {
+                        case 0:
+                            if (pixelValue[x - 1][y - 1] == 0) {
+                                active = false;
+                            }
+                            break;
+                        case 1:
+                            if (pixelValue[x][y - 1] == 0) {
+                                active = false;
+                            }
+                            break;
+                        case 2:
+                            if (pixelValue[x + 1][y - 1] == 0) {
+                                active = false;
+                            }
+                            break;
+                        case 3:
+                            if (pixelValue[x - 1][y] == 0) {
+                                active = false;
+                            }
+                            break;
+                        case 4:
+                            if (pixelValue[x + 1][y] == 0) {
+                                active = false;
+                            }
+                            break;
+                        case 5:
+                            if (pixelValue[x - 1][y + 1] == 0) {
+                                active = false;
+                            }
+                            break;
+                        case 6:
+                            if (pixelValue[x][y + 1] == 0) {
+                                active = false;
+                            }
+                            break;
+                        case 7:
+                            if (pixelValue[x + 1][y + 1] == 1) {
+                                if (filler == 1) {
+                                    opvulling = fillChecker(x, y);
+                                    if (!opvulling) {
+                                        pixelCopy[x][y] = 0;
+                                        aantalNieuwePixels--;
+                                    }
+                                }
+                                else {
+                                    pixelCopy[x][y] = 0;
+                                    aantalNieuwePixels--;
+                                }
+                            }
+
+                            break;
+                        default:
+                            break;
+                        }
+                    }
+                }
+                active = true;
+            }
+        }
+    }
+}
+
+
+
+bool fillChecker(int x, int y) {
+
+    if ((x + y) % 5 == 0) {
+        return(true);
+    }
+    else { return(false); }
+
+}

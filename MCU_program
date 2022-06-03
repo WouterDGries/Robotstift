@@ -1,0 +1,493 @@
+#include "mbed.h"
+//using namespace std::chrono;      //unlink for use of timers
+//abcdef
+//onderstand zijn alle in en uitgangen naar de MCU
+static BufferedSerial pc(D5, D4);           // Create a serial object USBTX, USBRX
+DigitalOut dirX(D8);                        //naar de Stepper driver x-as
+DigitalOut stepX(D6);
+DigitalOut dirY(D9);                        //naar de Stepper driver y-as
+DigitalOut stepY(D7);
+DigitalIn eindX1(D11, PullDown);            //De end-switch knoppen die aan de zijkanten zitten x-as
+//DigitalIn eindX2(D12, PullDown);            //Zit op de X-as component (wordt tijdens sprint 2 nog niet gebruikt   )
+DigitalIn eindY(D10, PullDown);             //De end-switch knop voor de y-as
+PwmOut Zstift(A6);  
+InterruptIn knop(D12,PullDown);                        
+
+
+int Xpositie;
+int Ypositie;
+
+const int lijnArrayGrootte = 255;
+
+const short Xwachttijd = 2;                  //de wachttijd voor tussen elke puls voor de stappenmotor. 
+const short Ywachttijd = 3;                  //Let op! wordt verdubbeld doordat hij voor elke puls 2x een wachttijd heeft.
+
+//Onderstaand de functies die onder de main staan
+void errorX();
+void errorY();
+void homeX();
+void homeY();
+void verplaats(int Xtarget, int Ytarget);
+void stift();
+void checkWaitTime(char currentCase,char previousCase);
+
+
+int main(void)
+{
+  dirX = 1; stepX = 1; ThisThread::sleep_for(1ms); stepX = 0; //Geeft de X- en Y-as een puls om de driver in zijn 'running' state te zetten
+  dirY = 1; stepY = 1; ThisThread::sleep_for(1ms); stepY = 0;
+  ThisThread::sleep_for(1000ms);
+  Zstift.period_ms(20);
+  Zstift = 0.075;
+  homeX();                                //zorgt dat de robot naar zijn home positie gaat (0,0)
+  const int AANTAL = 3;                   //voor de array waar hij zijn data in stopt. Hij ontvangt 3 gegevens, X, Y en Z-as
+  int bufferread[AANTAL];                 //de array waar hij zijn ontvangen data in stopt.
+ 
+  printf("Startup sequel succesfull\nkallibreer stift svp\n");
+ while(!knop){
+     Zstift = 0.05;
+ }
+ Zstift = 0.075;
+  int Xnaartoe = 0;                        //Variabele waarin de positie waar hij naartoe moet in komt te staan
+  int Ynaartoe = 0;
+  char startbit[1];
+  Timer timer;
+  timer.start();
+  bool toggle= true;
+  char bufferherstel[1] = {9};
+ 
+  while (1) {
+    
+    if (pc.readable()) {
+      while(startbit[0] != 9)                   //voor langere lijnen, pas verder als er minimaal 500bytes zijn
+      {
+          pc.read(startbit,1);
+          }                         
+     printf("Startbit received");
+     startbit[0]= 1;
+      char mybytes[6];                        //aantal bytes die hij ontvangt
+
+      ThisThread::sleep_for(100ms);                    //Deze Wait niet te klein maken, anders leest hij een ruis signaal
+      pc.read(mybytes, 6);                            //leest de 6 bytes die hij ontvangt.
+
+      bufferread[0] = (mybytes[0] << 8) + mybytes[1]; //omzetting van bytes naar integers
+      bufferread[1] = (mybytes[2] << 8) + mybytes[3];
+      bufferread[2] = (mybytes[4] << 8) + mybytes[5];
+
+      printf("Received starting points: ");//print de 3 CoÃ¶rdinaten die hij ontvangen heeft
+      for (int i = 0; i < AANTAL; i++) {
+        printf(" %d ", bufferread[i]);
+      }
+      printf("\n");
+
+      Xnaartoe = bufferread[0];                   //Veranderd 'naartoe' met de waarde waar die naartoe moet gaan.
+      Ynaartoe = bufferread[1];
+
+      verplaats(Xnaartoe,Ynaartoe);                    //Roept de verplaatsfunctie aan met de waardes waar die naartoe moet
+    }
+    
+    }
+
+
+}
+
+void verplaats(int Xtarget, int Ytarget) {                  //wordt aangeroepen met een target waar die naar toe moet verplaatsen
+  printf("");
+  char NewByte[lijnArrayGrootte];                                            //Hierin komt de nieuwe Byte voor de onderlinge positie
+  for (int i = 0; i < lijnArrayGrootte; i++) {
+    NewByte[i] = 0;
+  }
+  //printf("Moving %d on the X-axis and %d on the Y axis", Xverschil, Yverschil);                    //print de verschillen
+
+  const int aantal = 1;                                       // De grootte van de array die hij verstuurd
+  int buffer[aantal] = {9};                                   //de array die hij weer terug stuurt. stuurt dus een 9 terug
+
+  bool reading = true;                                        //Zolang er een lijn wordt getekend is de reading true
+
+  int Xverschil, Yverschil;                                   //het verschil voor hoeveel hij moet verplaatsen
+  int Xverplaatsfactor = 12;  //12.3
+  int Yverplaatsfactor = 2;   //1.85                            //hoeveel pulsen er nodig zijn om 1 positie opzij te gaan.
+
+  unsigned int endOfXLine,endOfYLine,endOfLine;                 //$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+  const unsigned int brakeSize = 10;                            //brakesize dient als "dempingswaarde"
+
+  if (Xtarget > Xpositie) {                                      //kijkt eerst welke riching die op moet en bepaald het verschil
+    dirX = 1;
+    Xverschil = Xtarget - Xpositie;
+  }
+  if (Xtarget < Xpositie) {
+    Xverschil = Xpositie - Xtarget;
+    dirX = 0;
+  }
+  if (Xtarget == Xpositie) {
+    Xverschil = 0;
+  }
+
+  if (Ytarget > Ypositie) {                               //doet hetzelfde geintje opnieuw voor de Y-as
+    dirY = 1;
+    Yverschil = Ytarget - Ypositie;
+  }
+  if (Ytarget < Ypositie) {
+    Yverschil = Ypositie - Ytarget;
+    dirY = 0;
+  }
+  if (Ytarget == Ypositie) {
+    Yverschil = 0;
+  }
+
+    endOfXLine = Xverschil;                  //$$$$$$$$$$$$$$$$$
+    endOfYLine = Yverschil;                  //De hoeveelheid pixels die hij gaat verplaatsen stopt hij in de waarde 'endline' voor een later statement
+
+    printf("Moving %d on the X-axis and %d on the Y axis", Xverschil, Yverschil);                    //print de verschillen
+
+  for (int i = 0; i < Xverschil * Xverplaatsfactor; i++) {  //gaat vervolgens net zo veel rondjes draaien dat nodig is om er te komen.
+    /*
+    if((i*Xverplaatsfactor) < brakeSize){
+        int waitTime = 5*(brakeSize - (i));                               //$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+        ThisThread::sleep_for(std::chrono::milliseconds(waitTime)); //wacht aan het begin wat langer totdat hij op "full speed" is.
+    }
+    if((i*Xverplaatsfactor) > endOfXLine - brakeSize){                  
+        int waitTime = sqrt((i - endOfXLine)^2);                    //aan het einde van de lijn gaat hij ook weer rustig aan afremmen.
+        ThisThread::sleep_for(std::chrono::milliseconds(waitTime));
+    }
+    */
+
+    if (!eindX1 /*&& !eindX2*/) {
+      stepX = 1;                                      //zolang de eindknoppen niet ingedrukt zijn gaat hij weer een puls geven om opzij te gaa
+        ThisThread::sleep_for(std::chrono::milliseconds(Xwachttijd));
+      stepX = 0;
+        ThisThread::sleep_for(std::chrono::milliseconds(Xwachttijd));
+    }
+    else {                                              //is de eindknop wel ingedrukt springt hij uit de for loop roept hij de error functie aan
+      errorX();
+      break;
+    }
+    Xpositie = Xtarget;                                    //is hij klaar met de loop dan veranderd hij X-positie met hetgeen waar hij heen is gegaan
+  }
+  printf("Arrived at X-Position %d\n", Xtarget);
+
+  for (int i = 0; i < Yverschil * Yverplaatsfactor; i++) {
+
+    /*  if((i*Yverplaatsfactor) < brakeSize){
+            int waitTime =5*(brakeSize - (i));
+            ThisThread::sleep_for(std::chrono::milliseconds(waitTime));
+        }
+        if((i*Yverplaatsfactor) > endOfYLine - brakeSize){                  //$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+            int waitTime = sqrt((i - endOfYLine)^2);
+            ThisThread::sleep_for(std::chrono::milliseconds(waitTime));
+        }
+    */
+    if (!eindY) {
+      stepY = 1;
+        ThisThread::sleep_for(std::chrono::milliseconds(Ywachttijd));
+      stepY = 0;
+        ThisThread::sleep_for(std::chrono::milliseconds(Ywachttijd));
+    }
+    else {
+      errorY();                                        //is de eindknop wel ingedrukt springt hij uit de for loop roept hij de error functie aan
+      break;
+    }
+    Ypositie = Ytarget;                                  //is hij klaar met de loop dan veranderd hij X-positie met hetgeen waar hij heen is gegaan
+  }
+  
+
+  printf("");
+  pc.write(buffer, aantal);                           //Komt hij weer terug dan stuurt hij de buffer terug naar de computer zodat deze weer verder kan.
+  printf("Notified Computer that i arrived\n");
+
+  // ############# HIER DE STIFT OP HET BORD LATEN DRUKKEN ##############
+    Zstift = 0.05;
+
+  /* Hij gaat nu een loop in die het mogelijkmaakt om lijnen te gaan trekken. */
+  ThisThread::sleep_for(100ms);        //!!!!Deze timing goed afstellen voor een zo snel mogelijke handeling
+  printf("Ready to receive line array\n");
+  bool lineTransfer = true;
+  
+  while(lineTransfer){
+  if (pc.readable()) {
+    ThisThread::sleep_for(400ms);
+    pc.read(NewByte, lijnArrayGrootte);                            //leest de 500 bytes aan array met de aanwijzingen
+  }
+  char bufferCorrect[1] = {5};
+  char bufferFalse[1] = {4};
+
+  if(NewByte[0]!= 9){
+      printf("The Array wasn't properly transferd###########\n");
+      NewByte[1] = 8;
+    char bufferEmty[lijnArrayGrootte];
+    pc.read(bufferEmty,lijnArrayGrootte);
+    ThisThread::sleep_for(100ms);
+    pc.write(bufferFalse,aantal);
+    printf("4 gestuurd\n");
+    ThisThread::sleep_for(100ms);
+  }
+
+  if(NewByte[0] == 9){
+      ThisThread::sleep_for(50ms);
+      pc.write(bufferCorrect,aantal);
+    printf("5 gestuurd\n");
+
+      lineTransfer = false;
+      printf("The line is correct\n");
+  }
+
+  }
+
+   /* for (int i = 0; i < lijnArrayGrootte; i++) {                    //print de gehele array rij
+      printf("%d", NewByte[i]);
+    }*/
+
+  /*  bool toggle = true;
+    unsigned int plusser = 0;
+while(toggle){
+    
+    if(NewByte[plusser] == 8){
+        endOfLine = plusser;                          //$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+        toggle = false;                               //stopt het aantal intructies van de array in een variabele
+    }
+    plusser++;
+}    
+*/
+    printf("\n");
+    int huidigePixel = 1;
+    char previousCase = 0,currentCase = 0;
+    while (reading) {
+        /*
+        if(huidigePixel < brakeSize){                                   //$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+        int waitTime = brakeSize - huidigePixel;                        //aan het begin en einde gaat hij langzamer
+            ThisThread::sleep_for(std::chrono::milliseconds(waitTime));
+        }
+        if(huidigePixel > endOfLine - brakeSize){                  
+            int waitTime = sqrt((huidigePixel - endOfLine)^2);
+            ThisThread::sleep_for(std::chrono::milliseconds(waitTime));
+        }
+    */
+    if(huidigePixel >= 1){
+      currentCase = NewByte[huidigePixel];
+      previousCase = NewByte[huidigePixel - 1];  
+    }
+    checkWaitTime(currentCase,previousCase);
+      switch (NewByte[huidigePixel]) {
+        case 0:                                     //case 0 == y + 1
+          dirY = 1;
+          for (int i = 0; i < Yverplaatsfactor; i++) {
+            stepY = 1;ThisThread::sleep_for(std::chrono::milliseconds(Ywachttijd));stepY = 0;ThisThread::sleep_for(std::chrono::milliseconds(Ywachttijd));
+          }
+          //printf("Case 0\n");
+          huidigePixel++;
+          Ypositie++;
+          break;
+        case 1:                                    //case 1 == y - 1
+          dirY = 0;
+          for (int i = 0; i < Yverplaatsfactor; i++) {
+            stepY = 1;ThisThread::sleep_for(std::chrono::milliseconds(Ywachttijd));stepY = 0;ThisThread::sleep_for(std::chrono::milliseconds(Ywachttijd));
+          }
+          huidigePixel++;
+          Ypositie--;
+          break;
+        case 2:                                    //case 2 == x + 1
+          dirX = 1;
+          for (int i = 0; i < Xverplaatsfactor; i++) {
+            stepX = 1;ThisThread::sleep_for(std::chrono::milliseconds(Xwachttijd));stepX = 0;ThisThread::sleep_for(std::chrono::milliseconds(Xwachttijd));
+          }
+          huidigePixel++;
+          Xpositie++;
+          break;
+        case 3:                                     //case 3 == x - 1
+          dirX = 0;
+          for (int i = 0; i < Xverplaatsfactor; i++) {
+            stepX = 1;ThisThread::sleep_for(std::chrono::milliseconds(Xwachttijd));stepX = 0;ThisThread::sleep_for(std::chrono::milliseconds(Xwachttijd));
+          }
+          huidigePixel++;
+          Xpositie--;
+          break;
+        case 4:                                     //case 4 == Y + 1 && X - 1
+          dirY = 1;
+          for (int i = 0; i < Yverplaatsfactor; i++) {
+            stepY = 1;ThisThread::sleep_for(std::chrono::milliseconds(Ywachttijd));stepY = 0;ThisThread::sleep_for(std::chrono::milliseconds(Ywachttijd));
+          }
+          dirX = 0;
+          for (int i = 0; i < Xverplaatsfactor; i++) {
+            stepX = 1;ThisThread::sleep_for(std::chrono::milliseconds(Xwachttijd));stepX = 0;ThisThread::sleep_for(std::chrono::milliseconds(Xwachttijd));
+          }
+          huidigePixel++;
+          Xpositie--;
+          Ypositie++;
+          break;
+        case 5:                                     //case 5 == Y + 1 && X + 1
+          dirY = 1;
+          for (int i = 0; i < Yverplaatsfactor; i++) {
+            stepY = 1;ThisThread::sleep_for(std::chrono::milliseconds(Ywachttijd));stepY = 0;ThisThread::sleep_for(std::chrono::milliseconds(Ywachttijd));
+          }
+          dirX = 1;
+          for (int i = 0; i < Xverplaatsfactor; i++) {
+            stepX = 1;ThisThread::sleep_for(std::chrono::milliseconds(Xwachttijd));stepX = 0;ThisThread::sleep_for(std::chrono::milliseconds(Xwachttijd));
+          }
+          huidigePixel++;
+          Ypositie++;
+          Xpositie++;
+          break;
+        case 6:                                     //case 6 == Y - 1 && X + 1
+          dirY = 0;
+          for (int i = 0; i < Yverplaatsfactor; i++) {
+            stepY = 1;ThisThread::sleep_for(std::chrono::milliseconds(Ywachttijd));stepY = 0;ThisThread::sleep_for(std::chrono::milliseconds(Ywachttijd));
+          }
+          dirX = 1;
+          for (int i = 0; i < Xverplaatsfactor; i++) {
+            stepX = 1;ThisThread::sleep_for(std::chrono::milliseconds(Xwachttijd));stepX = 0;ThisThread::sleep_for(std::chrono::milliseconds(Xwachttijd));
+          }
+          huidigePixel++;
+          Ypositie--;
+          Xpositie++;
+          break;
+        case 7:                                     //case 7 == Y - 1 && X - 1
+          dirY = 0;
+          for (int i = 0; i < Yverplaatsfactor; i++) {
+            stepY = 1;ThisThread::sleep_for(std::chrono::milliseconds(Ywachttijd));stepY = 0;ThisThread::sleep_for(std::chrono::milliseconds(Ywachttijd));
+          }
+          dirX = 0;
+          for (int i = 0; i < Xverplaatsfactor; i++) {
+            stepX = 1;ThisThread::sleep_for(std::chrono::milliseconds(Xwachttijd));stepX = 0;ThisThread::sleep_for(std::chrono::milliseconds(Xwachttijd));
+          }
+          huidigePixel++;
+          Ypositie--;
+          Xpositie--;
+          break;
+        case 8:                                     //case 8 betekent dat de lijn klaar is
+          reading = false;                            //hier wordt reading false gemaakt zodat hij uit de while loop springt
+          //######### HIER DE STIFT WEER VAN HET BORD AF HALEN #############
+         Zstift = 0.075;
+
+          break;
+
+        default:
+          break;
+        }
+    }
+    printf("Current position: %d : %d  \n\r",Xpositie,Ypositie);
+    printf("Left the While loop, notifying computer...\n");
+    ThisThread::sleep_for(50ms);
+
+    pc.write(buffer, aantal);                           //stuurt na de switch case loop dat hij een nieuwe byte kan ontvangen.
+}
+
+void errorX() {                                 //wordt aangeroepen wanneer hij tegen een X-as knop aan zit. hier draait hij een rondje terug zodra dit gebeurdt.
+  printf("Error X-as\n");
+  dirX = !dirX;
+  ThisThread::sleep_for(1ms);
+  for (int i = 0; i < 25; i++) {
+    stepX = 1;
+    ThisThread::sleep_for(1ms);
+    stepX = 0;
+    ThisThread::sleep_for(1ms);
+  }
+}
+
+void errorY() {                                 //wordt aangeroepen wanneer hij tegen een Y-as knop aan zit. hier draait hij een rondje terug zodra dit gebeurdt.
+  printf("Error Y-as\n");
+  dirY = !dirY;
+  ThisThread::sleep_for(1ms);
+  for (int i = 0; i < 25; i++) {
+    stepY = 1;
+    ThisThread::sleep_for(1ms);
+    stepY = 0;
+    ThisThread::sleep_for(1ms);
+  }
+}
+
+void homeX() {                              //laat de X-as net zolang naar links bewegen tot de eindknop is ingedrukt. gaat daarna klein stukje naar rechts
+  dirX = 0;
+  while (!eindX1) {   
+    stepX = 1;ThisThread::sleep_for(std::chrono::milliseconds(Xwachttijd));stepX = 0;ThisThread::sleep_for(std::chrono::milliseconds(Xwachttijd));
+  }
+  dirX = 1;
+  for (int i = 0; i < 50; i++) {
+    stepX = 1;
+    ThisThread::sleep_for(4ms);
+    stepX = 0;
+    ThisThread::sleep_for(4ms);
+  }
+  Xpositie = 0;
+  printf("Arrived at X-home\n");
+  homeY();                            //zodra de X-as is ge-homed roept hij de functie home y aan om deze te homen.
+}
+
+void homeY() {                              //Hetzelfde als de X-as
+  dirY = 0;
+  while (!eindY) {
+    stepY = 1;ThisThread::sleep_for(std::chrono::milliseconds(Ywachttijd));stepY = 0;ThisThread::sleep_for(std::chrono::milliseconds(Ywachttijd));
+  }
+  dirY = 1;
+  for (int i = 0; i < 25; i++) {
+    stepY = 1;
+    ThisThread::sleep_for(5ms);
+    stepY = 0;
+    ThisThread::sleep_for(5ms);
+  }
+  Ypositie = 0;
+  printf("Arrived at Y-home\n");
+
+}
+
+void checkWaitTime(char currentCase,char previousCase){
+    const unsigned int wachttijd = 250;
+    switch(currentCase){
+        case 0:
+            if(previousCase == 7 ||previousCase == 6||previousCase == 2 ||previousCase == 3){
+                    ThisThread::sleep_for(std::chrono::milliseconds(wachttijd));
+            }
+        break;
+        case 1:
+            if(previousCase == 4 ||previousCase == 5||previousCase == 2 ||previousCase == 3){
+                    ThisThread::sleep_for(std::chrono::milliseconds(wachttijd));
+            }
+        break;
+        case 2:
+            if(previousCase == 7 ||previousCase == 4||previousCase == 1 ||previousCase == 0){
+                    ThisThread::sleep_for(std::chrono::milliseconds(wachttijd));
+            }
+        break;
+        case 3:
+             if(previousCase == 5 ||previousCase == 6||previousCase == 1 ||previousCase == 0){
+                    ThisThread::sleep_for(std::chrono::milliseconds(wachttijd));
+            }
+        break;
+        case 4:
+            if(previousCase == 2 ||previousCase == 6 ||previousCase == 1||previousCase == 5 ||previousCase == 7){
+                    ThisThread::sleep_for(std::chrono::milliseconds(wachttijd));
+            }
+        break;
+        case 5:
+            if(previousCase == 3 ||previousCase == 7 ||previousCase == 1||previousCase == 6 ||previousCase == 4){
+                    ThisThread::sleep_for(std::chrono::milliseconds(wachttijd));
+            }
+        break;
+        case 6:
+            if(previousCase == 0 ||previousCase == 4 ||previousCase == 3||previousCase == 7 ||previousCase == 5){
+                    ThisThread::sleep_for(std::chrono::milliseconds(wachttijd));
+            }
+        break;
+        case 7:
+            if(previousCase == 2 ||previousCase == 5 ||previousCase == 0||previousCase == 4 ||previousCase == 6){
+                    ThisThread::sleep_for(std::chrono::milliseconds(wachttijd));
+            }
+        break;
+        default:
+        break;
+
+    }
+    
+}
+
+int i = 0;
+void stift(){
+    printf("Ja hall0 %d\n\r", i);
+        if(i == 0 ){
+        i++;
+        Zstift = 0.05;
+        }
+        if(i >= 1 ){
+            Zstift = 0.075;
+            i = 0;
+        }
+}

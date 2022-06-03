@@ -1,0 +1,4 @@
+This project is made by three students of the university of applied sciences Windesheim located in Zwolle the Netherlands.
+This project contains two software programs. One is console program which you'll need to run on a laptop or computer which is able
+to connect to devices via bluetooth. The other program is the one for the microcontroller for the robot. The microcontroller used in 
+this project is the STM32F303K8T6. Please download the schematic files for all the hardware information.

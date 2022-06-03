@@ -1,14 +1,13 @@
-/*
-Warning!: Software isn't finished yet and is still being modified
-This is still in a test
-*/
+/*This code is written for the Project "Robotstift"
+Please visit https://github.com/WouterDGries/Robotstift for more information*/
 
 #include <iostream>
 #include "bitmap_image.hpp"
 #include <iomanip>
 #include <windows.h>
 #include <stdio.h>
-
+#include <sstream>
+#include <string>
 
 const int Ypixels = 451;
 const int Xpixels = 371;
@@ -29,15 +28,17 @@ DCB dcb;
 
 
 int main() {
-
+    printf("Welcome, This is the application for the Robotstift.\n");
     OpenComPoort();
 
     if (hComm != INVALID_HANDLE_VALUE)
     {
+        
         Instellingen();
         //Schrijven();
 
     }
+     else { return(1); }
 
     bool pixelValue[Xpixels][Ypixels];                                             //Paint plaatje is 450 hoog en 370 breedt
     bool pixelCopy[Xpixels][Ypixels];
@@ -54,10 +55,11 @@ int main() {
     }
 
     int mode = 0;
-    std::cout << "In welke mode wil je de afbeelding uittekenen? \n";
-    std::cout << "  *De volledige afbeelding:               1\n";
-    std::cout << "  *De uitlijning met lichte opvulling:    2\n";
-    std::cout << "  *Alleen de uitlijning:                  3\n";
+    std::cout << "Which mode would you like to use?\n";
+    std::cout << "  *1 Full Image\n";
+    std::cout << "  *2 Boundaries with a little inside \n";
+    std::cout << "  *3 Boundaries only\n";
+    std::cout << "Please type the mode number\n";
     std::cin >> mode; std::cin.get();
 
     if (mode == 2) {
@@ -69,16 +71,34 @@ int main() {
 
     tekenen(pixelCopy, aantalNieuwePixels, aantalStopPunten);
 
-    std::cout << "Aantal te tekenen pixels: " << aantalNieuwePixels << "\n";
-    std::cout << "Aantal stoppunten " << aantalStopPunten;
+   // std::cout << "Aantal te tekenen pixels: " << aantalNieuwePixels << "\n";
+   // std::cout << "Aantal stoppunten " << aantalStopPunten;
 
 }
 
 
 void OpenComPoort()
 {
+    printf("Please tell us which COM port the Robot is connected to.\nIf you dont know it yet go to the configuration window->Devices->right click on HC-05 -> properties\n");
+    printf("The Robot is connected to COM");
+
+
+    char invoer[3];
+    std::string invoerr;
+
+    std::getline(std::cin, invoerr);
+    if (invoerr.length() >= 3) { printf("##WARNING! The COM port must not contain more than 2 digits\n"); }
+
+    strcpy_s(invoer, invoerr.c_str());
+
+    char poort[6] = { 'C','O','M',invoer[0],invoer[1] };
+
+    for (int i = 0; i < 5; i++) {
+        std::cout << poort[i];
+    }
+    std::cout << "\n";
     // openen van COM poort. Voor het nummer: zie apparaatbeheer
-    hComm = CreateFileA("COM9",               //port name
+    hComm = CreateFileA(poort,               //port name
         GENERIC_READ | GENERIC_WRITE,         //Read/Write
         0,                                    // No Sharing
         NULL,                                 // No Security
@@ -88,9 +108,9 @@ void OpenComPoort()
 
     // controlleer of het gelukt is
     if (hComm == INVALID_HANDLE_VALUE)
-        printf("Error in opening serial port");
+        printf("Error in opening serial port. Pleasy try again\n");
     else
-        printf("opening serial port successful");
+        printf("Connection ready!\n");
 
    
 }
@@ -112,8 +132,6 @@ bool Instellingen()
     // instellen van data communication block
     //if (!SetCommState(hComm, &dcb))
    //     return 0x100;
-
-    std::cout << "Nu zijn alle instellingen gezet";
     //std::cin.get();
 }
 
@@ -169,7 +187,6 @@ bool Schrijven(short PositieToConvert[])
         &dNoOfBytesWritten,           //Bytes written
         NULL);
 
-    std::cout << "De positie is verstuurd\n";
     while (ReadByte == 1) {
 
         SetCommMask(hComm, EV_RXCHAR | EV_ERR); //receive character event 
@@ -183,7 +200,7 @@ bool Schrijven(short PositieToConvert[])
 
     }
 
-    std::cout << "De motor is aangekomen\n";
+    std::cout << "Arrived at starting points\n";
     ReadByte = 1;
 
     //  std::cout << "Herhalen? (1/0)\n";
@@ -230,14 +247,14 @@ void SchrijvenKort(char lijnArray[])
             &dNoOfBytesWritten,           //Bytes written
             NULL);
 
-        std::cout << "\nIk heb dit aan verstuurd" << dNoOfBytesWritten << "\n";
-        for (int i = 0; i < lijnArrayGrootte; i++) {
+        std::cout << "\nLine instructions sent...\n";
+        /*for (int i = 0; i < lijnArrayGrootte; i++) {
 
             int alpha = lijnArray[i];
             std::cout << alpha;
-        }
+        }*/
 
-        std::cout << "De verplaatsing is verstuurd: " << dNoOfBytesWritten << " bytes verstuurd\n";
+       // std::cout << "De verplaatsing is verstuurd: " << dNoOfBytesWritten << " bytes verstuurd\n";
 
         while (ReadByte == 1) {
 
@@ -252,14 +269,18 @@ void SchrijvenKort(char lijnArray[])
             {
                 ReadByte = 0x101;
             }
-            std::cout << "Received: " << ReadByte;
+            //std::cout << "Received: " << ReadByte;
 
         }
 
         if (ReadByte == 5) {
             correctTransfer = true;
+            std::cout << "Succesfull\n";
         }
-        else { correctTransfer = false; }
+        else {
+            correctTransfer = false;
+            std::cout << "Line wasn't sent correctly. I will try again\n";
+        }
 
 
 
@@ -281,7 +302,7 @@ void SchrijvenKort(char lijnArray[])
         {
             ReadByte = 0x101;
         }
-        std::cout << "Received: " << ReadByte;
+        std::cout << "";
 
     }
     ReadByte = 1;
@@ -314,7 +335,7 @@ void tekenen(bool pixelCopy[][Ypixels], int& aantalNieuwePixels, int& aantalStop
                 firstY = y;                         //coördinaten worden gekopieërd
                 firstX = x;
                 short PositieToConvert[3]{ firstX,firstY,1 };
-                std::cout << "\n Ik verstuur de coördinaten " << firstX << " " << firstY << " \n";
+                std::cout << "\n Sending starting points " << firstX << " " << firstY << " \n";
                 Schrijven(PositieToConvert);
                 // std::cin.get();
                 int huidigePixel = 1;           //0##3
